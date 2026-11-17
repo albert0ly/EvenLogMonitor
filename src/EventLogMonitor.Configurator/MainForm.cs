@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using EventLogMonitor;
+using EventLogMonitor.Configurator.Ai;
 
 namespace EventLogMonitor.Configurator;
 
@@ -31,6 +32,15 @@ public sealed class MainForm : Form
     private readonly Label _status = new() { AutoSize = true, ForeColor = Color.DarkSlateGray };
     private readonly Button _loadEvents = new() { Text = "Load recent events", AutoSize = true };
     private readonly Button _previewMatches = new() { Text = "Preview matches", AutoSize = true };
+    private readonly TextBox _aiRequest = new()
+    {
+        Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Vertical,
+        PlaceholderText = "e.g. I have ASP.NET application 'Claims' in local IIS. Watch critical errors and notify me when only an IIS reset can help."
+    };
+    private readonly Button _draftButton = new() { Text = "Draft with AI", Dock = DockStyle.Fill };
+    private readonly Button _aiSettingsButton = new() { Text = "AI settings…", Dock = DockStyle.Fill };
+    private readonly AiSettings _aiSettings = AiSettings.Load();
+    private bool _drafting;
 
     private readonly List<EventRule> _rules = [];
     private List<SampleEvent> _sampleEvents = [];
@@ -54,6 +64,8 @@ public sealed class MainForm : Form
         _logName.SelectedIndexChanged += (_, _) => ClearEventChoices();
         _loadEvents.Click += (_, _) => LoadRecentEvents();
         _previewMatches.Click += (_, _) => PreviewCurrentRule();
+        _draftButton.Click += async (_, _) => await DraftWithAiAsync();
+        _aiSettingsButton.Click += (_, _) => OpenAiSettings();
         LoadLogNames();
         LoadIisPools();
         LoadConfiguration(ResolveInitialConfigPath());
@@ -122,7 +134,8 @@ public sealed class MainForm : Form
         left.Controls.Add(leftButtons, 0, 2);
         split.Panel1.Controls.Add(left);
 
-        var right = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(8, 4, 0, 0) };
+        var right = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(8, 4, 0, 0) };
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 74));
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, 74));
         right.RowStyles.Add(new RowStyle(SizeType.Percent, 57));
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
@@ -145,7 +158,15 @@ public sealed class MainForm : Form
         header.Controls.Add(_logName, 1, 1);
         header.Controls.Add(_loadEvents, 2, 1);
         header.SetColumnSpan(_loadEvents, 2);
-        right.Controls.Add(header, 0, 0);
+        var aiPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1 };
+        aiPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        aiPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
+        aiPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+        aiPanel.Controls.Add(_aiRequest, 0, 0);
+        aiPanel.Controls.Add(_draftButton, 1, 0);
+        aiPanel.Controls.Add(_aiSettingsButton, 2, 0);
+        right.Controls.Add(MakeGroup("Describe the rule in plain English (AI drafts it; you review before saving)", aiPanel), 0, 0);
+        right.Controls.Add(header, 0, 1);
 
         var filters = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Padding = new Padding(0, 4, 0, 4) };
         filters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
@@ -186,7 +207,7 @@ public sealed class MainForm : Form
         addPool.Controls.Add(refreshPools);
         poolPanel.Controls.Add(addPool, 0, 1);
         filters.Controls.Add(MakeGroup("IIS application pools (nothing checked = any)", poolPanel), 1, 1);
-        right.Controls.Add(filters, 0, 1);
+        right.Controls.Add(filters, 0, 2);
 
         var messageAndOptions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 2, Padding = new Padding(0, 2, 0, 2) };
         messageAndOptions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
@@ -207,7 +228,7 @@ public sealed class MainForm : Form
         var saveRule = new Button { Text = "Save rule", Dock = DockStyle.Fill };
         saveRule.Click += (_, _) => SaveCurrentRule();
         messageAndOptions.Controls.Add(saveRule, 3, 1);
-        right.Controls.Add(messageAndOptions, 0, 2);
+        right.Controls.Add(messageAndOptions, 0, 3);
 
         var actionBar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Padding = new Padding(0, 4, 0, 0) };
         var saveConfig = new Button { Text = "Save configuration", AutoSize = true };
@@ -215,7 +236,7 @@ public sealed class MainForm : Form
         actionBar.Controls.Add(saveConfig);
         actionBar.Controls.Add(_previewMatches);
         actionBar.Controls.Add(_status);
-        right.Controls.Add(actionBar, 0, 3);
+        right.Controls.Add(actionBar, 0, 4);
 
         _preview.Columns.Add("Time", 145);
         _preview.Columns.Add("Provider", 210);
@@ -224,7 +245,7 @@ public sealed class MainForm : Form
         _preview.Columns.Add("Application pool", 170);
         _preview.Columns.Add("PID", 75);
         _preview.Columns.Add("Message", 500);
-        right.Controls.Add(MakeGroup("Preview of recent matching events", _preview), 0, 4);
+        right.Controls.Add(MakeGroup("Preview of recent matching events", _preview), 0, 5);
     }
 
     private static Label FieldLabel(string text) => new() { Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
@@ -762,6 +783,74 @@ public sealed class MainForm : Form
         if (!_appPools.Items.Cast<FilterChoice>().Any(x => string.Equals(x.Value, name, StringComparison.OrdinalIgnoreCase)))
             _appPools.Items.Add(new FilterChoice(name, name), true);
         _manualPool.Clear();
+    }
+
+    private void OpenAiSettings()
+    {
+        using var dialog = new AiSettingsDialog(_aiSettings);
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+            SetStatus($"AI settings saved. Model: {_aiSettings.Model} at {_aiSettings.Endpoint}.");
+    }
+
+    private async Task DraftWithAiAsync()
+    {
+        if (_drafting) return;
+        var request = _aiRequest.Text.Trim();
+        if (request.Length == 0)
+        {
+            SetStatus("Describe what you want to watch, then click Draft with AI.");
+            return;
+        }
+
+        _drafting = true;
+        _draftButton.Enabled = false;
+        UseWaitCursor = true;
+        SetStatus($"Asking local model '{_aiSettings.Model}'… the first request can take a while while the model loads.");
+        try
+        {
+            var knownLogs = _logName.Items.Cast<object>().Select(x => x.ToString() ?? "").Where(x => x.Length > 0).ToList();
+            var outcome = await new RuleDrafter(_aiSettings).DraftAsync(request, _rules.Select(r => r.Name).ToList(), knownLogs);
+
+            if (outcome.Clarification is not null)
+            {
+                SetStatus("The AI needs more information.");
+                MessageBox.Show(this, outcome.Clarification, "More information needed", MessageBoxButtons.OK, MessageBoxIcon.Question);
+                return;
+            }
+
+            // Drafts are added to the in-memory list only. Nothing reaches appsettings.json until the user clicks Save configuration.
+            var firstNew = _rules.Count;
+            _rules.AddRange(outcome.Rules);
+            RefreshRuleList(firstNew);
+
+            var previewNote = "";
+            try
+            {
+                LoadRecentEvents();
+                PreviewCurrentRule();
+                previewNote = $" The first rule matches {_preview.Items.Count} of the {_sampleEvents.Count} recently loaded event(s) in its log.";
+            }
+            catch { /* preview is best effort */ }
+
+            var summary = "Drafted " + outcome.Rules.Count + " rule(s):\r\n • " + string.Join("\r\n • ", outcome.Rules.Select(r => r.Name)) +
+                          "\r\n\r\nThey are in the rule list but NOT saved to appsettings.json yet. Review each rule, then click Save configuration." +
+                          previewNote;
+            if (outcome.Warnings.Count > 0)
+                summary += "\r\n\r\nNotes:\r\n • " + string.Join("\r\n • ", outcome.Warnings);
+            SetStatus($"Drafted {outcome.Rules.Count} rule(s). Review them, then click Save configuration.");
+            MessageBox.Show(this, summary, "AI draft ready", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            SetStatus("AI draft failed.");
+            MessageBox.Show(this, ex.Message, "AI draft failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            _drafting = false;
+            _draftButton.Enabled = true;
+            UseWaitCursor = false;
+        }
     }
 
     private void SetStatus(string text) => _status.Text = "  " + text;

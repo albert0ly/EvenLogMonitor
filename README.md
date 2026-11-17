@@ -167,6 +167,11 @@ src/EventLogMonitor.Configurator/
   EventLogMonitor.Configurator.csproj
   Program.cs
   MainForm.cs
+src/EventLogMonitor.Configurator/Ai/
+  AiSettings.cs, AiSettingsDialog.cs, OllamaClient.cs, PromptBuilder.cs,
+  RuleDraft.cs, RuleDrafter.cs, ScenarioCatalog.cs
+docs/
+  AI-RULE-DRAFTING.md
 src/EventLogMonitor/
   EventLogMonitor.csproj
   Program.cs
@@ -180,6 +185,14 @@ scripts/
   install.ps1
   uninstall.ps1
 ```
+
+## AI rule drafting (added in 1.2)
+
+The Rule Builder has a **Describe the rule in plain English** box and a **Draft with AI** button. A local model (Ollama, no training, nothing leaves the machine) drafts the rules; you review and preview them, and nothing is saved until you click **Save configuration**. The monitoring service is not affected and does not use AI.
+
+Quick start: install Ollama, run `ollama pull qwen2.5:7b`, open the Configurator, click **AI settings…** → **Test connection**, then type for example *"I have ASP.NET application 'Claims' in local IIS. Watch critical errors and notify me when only an IIS reset can help."*
+
+Full documentation: [docs/AI-RULE-DRAFTING.md](docs/AI-RULE-DRAFTING.md).
 
 ## Rule Builder GUI (added in 1.1)
 
