@@ -26,13 +26,13 @@ use `qwen2.5:3b` and expect less reliable results. You can run Ollama on a diffe
 
 ## 2. Using it
 
-1. Type your request in the box at the top of the right-hand pane.
-2. Click **Open AI chat**, then press **Send** (Enter sends; Shift+Enter inserts a line break).
+1. Click **Open AI chat** in the Rule Builder and type your request in the chat window.
+2. Press **Send** (Enter sends; Shift+Enter inserts a line break).
 3. Ask follow-up questions or reply to clarification requests in the same chat. For example, “Do you see the last rule?” reads the final item in the Notification Rules list; “show the selected rule” uses the selected item; “list rules” shows names numbered #1, #2, etc. Rule details and proposed changes are formatted as indented JSON.
 4. To create or modify a rule, review the proposed fields in the transcript and click **Apply draft** or **Apply edit**. Closing the chat without applying leaves the rules unchanged. An applied change updates only the in-memory list.
 5. Review each rule (log, sources, IDs, levels, pools, channels, cooldown). Click **Save configuration** and restart the `EventLogMonitor` service, exactly as before. **Apply draft** does not save to disk. Closing or reloading with unsaved changes prompts you before discarding them.
 
-The chat sees a snapshot of rules already in the Notification Rules list at the time it opens, including the selection. Unsaved typing in the rule editor is not included; click **Save rule** first if those edits should be visible to the assistant. If the request is ambiguous, or names an IIS pool that does not exist, answer the AI's question in the same chat. For ASP.NET Core applications launched by Visual Studio with IIS Express (for example `https://localhost:7166/`), no IIS application pool is required: the assistant creates application/.NET crash and error rules. IIS Express is not full IIS, so the monitor can detect failures but cannot start, stop, reset, or restart the IIS Express process.
+The numbered Notification rules grid shows the order, name, log and enabled state of each rule. The recent-events preview marks severity with colored symbols; double-click an event to read its full message. The chat sees a snapshot of rules already in the Notification Rules list at the time it opens, including the selection. Unsaved typing in the rule editor is not included; click **Save rule** first if those edits should be visible to the assistant. If the request is ambiguous, or names an IIS pool that does not exist, answer the AI's question in the same chat. For ASP.NET Core applications launched by Visual Studio with IIS Express (for example `https://localhost:7166/`), no IIS application pool is required: the assistant creates application/.NET crash and error rules. IIS Express is not full IIS, so the monitor can detect failures but cannot start, stop, reset, or restart the IIS Express process.
 
 More examples:
 

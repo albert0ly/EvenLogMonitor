@@ -13,7 +13,7 @@ namespace EventLogMonitor.Configurator;
 public sealed class MainForm : Form
 {
     private readonly TextBox _configPath = new() { Dock = DockStyle.Fill };
-    private readonly ListBox _rulesList = new() { Dock = DockStyle.Fill };
+    private readonly ListView _rulesList = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = true, MultiSelect = false, HideSelection = false };
     private readonly TextBox _ruleName = new() { Dock = DockStyle.Fill };
     private readonly CheckBox _enabled = new() { Text = "Enabled", Checked = true, AutoSize = true };
     private readonly ComboBox _logName = new() { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
@@ -28,17 +28,25 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _cooldown = new() { Minimum = 0, Maximum = 86400, Value = 60, Width = 110 };
     private readonly CheckBox _notifyEmail = new() { Text = "Email", Checked = true, AutoSize = true };
     private readonly CheckBox _notifySms = new() { Text = "SMS", AutoSize = true };
-    private readonly ListView _preview = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = true };
+    private readonly ListView _preview = new()
+    {
+        Dock = DockStyle.Fill,
+        View = View.Details,
+        FullRowSelect = true,
+        GridLines = true,
+        HideSelection = false,
+        MultiSelect = false,
+        Scrollable = true,
+        HeaderStyle = ColumnHeaderStyle.Nonclickable,
+        BackColor = SystemColors.Window,
+        ForeColor = SystemColors.WindowText
+    };
+    private readonly ImageList _levelIcons = new() { ImageSize = new Size(16, 16), ColorDepth = ColorDepth.Depth32Bit };
     private readonly Label _status = new() { AutoSize = true, ForeColor = Color.DarkSlateGray };
     private readonly Button _loadEvents = new() { Text = "Load recent events", AutoSize = true };
     private readonly Button _previewMatches = new() { Text = "Preview matches", AutoSize = true };
     private readonly Button _saveRule = new() { Text = "Save rule", Dock = DockStyle.Fill, Enabled = false };
     private readonly Button _saveConfiguration = new() { Text = "Save configuration", AutoSize = true, Enabled = false };
-    private readonly TextBox _aiRequest = new()
-    {
-        Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Vertical,
-        PlaceholderText = "e.g. I have ASP.NET application 'Claims' in local IIS. Watch critical errors and notify me when only an IIS reset can help."
-    };
     private readonly Button _draftButton = new() { Text = "Open AI chat", Dock = DockStyle.Fill };
     private readonly Button _aiSettingsButton = new() { Text = "AI settings…", Dock = DockStyle.Fill };
     private readonly AiSettings _aiSettings = AiSettings.Load();
@@ -63,7 +71,7 @@ public sealed class MainForm : Form
 
         BuildLayout();
         FormClosing += ConfirmUnsavedChanges;
-        _rulesList.SelectedIndexChanged += (_, _) => SelectRule(_rulesList.SelectedIndex);
+        _rulesList.SelectedIndexChanged += (_, _) => SelectRule(SelectedRuleIndex);
         _logName.SelectedIndexChanged += (_, _) => ClearEventChoices();
         _loadEvents.Click += (_, _) => LoadRecentEvents();
         _previewMatches.Click += (_, _) => PreviewCurrentRule();
@@ -79,6 +87,7 @@ public sealed class MainForm : Form
         _notifySms.CheckedChanged += (_, _) => UpdateSaveRuleState();
         foreach (var list in new[] { _providers, _eventIds, _levels, _appPools })
             list.ItemCheck += (_, _) => BeginInvoke((Action)UpdateSaveRuleState);
+        InitializeLevelIcons();
         LoadLogNames();
         LoadIisPools();
         LoadConfiguration(ResolveInitialConfigPath());
@@ -125,7 +134,7 @@ public sealed class MainForm : Form
         pathBar.Controls.Add(reload, 3, 0);
         root.Controls.Add(pathBar, 0, 0);
 
-        var split = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 255, FixedPanel = FixedPanel.Panel1 };
+        var split = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 320, FixedPanel = FixedPanel.Panel1, Panel1MinSize = 280 };
         root.Controls.Add(split, 0, 1);
 
         var left = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(0, 4, 8, 0) };
@@ -133,11 +142,16 @@ public sealed class MainForm : Form
         left.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         left.RowStyles.Add(new RowStyle(SizeType.Absolute, 108));
         left.Controls.Add(new Label { Text = "Notification rules", Font = new Font(Font, FontStyle.Bold), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+        _rulesList.Columns.Add("#", 38);
+        _rulesList.Columns.Add("Rule", 145);
+        _rulesList.Columns.Add("Log", 85);
+        _rulesList.Columns.Add("On", 40);
         left.Controls.Add(_rulesList, 0, 1);
         var leftButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false };
         var newRule = new Button { Text = "+ New rule", Width = 220 };
         newRule.Click += (_, _) => NewRule();
-        var deleteRule = new Button { Text = "Delete selected", Width = 220 };
+        var deleteRule = new Button { Text = "Delete selected", Width = 220, Enabled = false };
+        _rulesList.SelectedIndexChanged += (_, _) => deleteRule.Enabled = SelectedRuleIndex >= 0;
         deleteRule.Click += (_, _) => DeleteSelectedRule();
         var addIisRules = new Button { Text = "Add IIS/.NET templates", Width = 220 };
         addIisRules.Click += (_, _) => AddIisTemplates();
@@ -148,7 +162,9 @@ public sealed class MainForm : Form
         split.Panel1.Controls.Add(left);
 
         var right = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(8, 4, 0, 0) };
-        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 74));
+        split.SplitterMoved += (_, _) => ResizeRuleColumns();
+        _rulesList.Resize += (_, _) => ResizeRuleColumns();
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, 74));
         right.RowStyles.Add(new RowStyle(SizeType.Percent, 57));
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
@@ -171,14 +187,15 @@ public sealed class MainForm : Form
         header.Controls.Add(_logName, 1, 1);
         header.Controls.Add(_loadEvents, 2, 1);
         header.SetColumnSpan(_loadEvents, 2);
-        var aiPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1 };
-        aiPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        aiPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
-        aiPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
-        aiPanel.Controls.Add(_aiRequest, 0, 0);
-        aiPanel.Controls.Add(_draftButton, 1, 0);
-        aiPanel.Controls.Add(_aiSettingsButton, 2, 0);
-        right.Controls.Add(MakeGroup("Ask AI about notification rules or request a change (review before saving)", aiPanel), 0, 0);
+        var aiPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Padding = new Padding(0, 4, 0, 0) };
+        _draftButton.Dock = DockStyle.None;
+        _draftButton.AutoSize = true;
+        _aiSettingsButton.Dock = DockStyle.None;
+        _aiSettingsButton.AutoSize = true;
+        aiPanel.Controls.Add(_draftButton);
+        aiPanel.Controls.Add(_aiSettingsButton);
+        aiPanel.Controls.Add(new Label { Text = "Draft or edit rules in chat; apply changes, then save configuration.", AutoSize = true, Margin = new Padding(12, 8, 0, 0), ForeColor = Color.DimGray });
+        right.Controls.Add(aiPanel, 0, 0);
         right.Controls.Add(header, 0, 1);
 
         var filters = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Padding = new Padding(0, 4, 0, 4) };
@@ -249,14 +266,17 @@ public sealed class MainForm : Form
         actionBar.Controls.Add(_status);
         right.Controls.Add(actionBar, 0, 4);
 
+        _preview.SmallImageList = _levelIcons;
         _preview.Columns.Add("Time", 145);
-        _preview.Columns.Add("Provider", 210);
+        _preview.Columns.Add("Provider", 150);
         _preview.Columns.Add("Event ID", 70);
-        _preview.Columns.Add("Level", 90);
-        _preview.Columns.Add("Application pool", 170);
-        _preview.Columns.Add("PID", 75);
+        _preview.Columns.Add("Level", 120);
+        _preview.Columns.Add("Application pool", 150);
+        _preview.Columns.Add("PID", 65);
         _preview.Columns.Add("Message", 500);
-        right.Controls.Add(MakeGroup("Preview of recent matching events", _preview), 0, 5);
+        _preview.Resize += (_, _) => ResizePreviewColumns();
+        _preview.DoubleClick += (_, _) => ShowSelectedEvent();
+        right.Controls.Add(MakeGroup("Recent events (double-click to read full message)", _preview), 0, 5);
     }
 
     private static Label FieldLabel(string text) => new() { Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
@@ -332,9 +352,8 @@ public sealed class MainForm : Form
             _rules.Clear();
             _rules.AddRange(section.Rules ?? []);
             _configPath.Text = path;
-            RefreshRuleList(-1);
-            if (_rules.Count > 0) _rulesList.SelectedIndex = 0;
-            else NewRule();
+            RefreshRuleList(_rules.Count > 0 ? 0 : -1);
+            if (_rules.Count == 0) NewRule();
             _configurationDirty = false;
             UpdateSaveConfigurationState();
             SetStatus($"Loaded {_rules.Count} rule(s). Save applies changes to this file; restart the Event Log Monitor service afterward.");
@@ -345,14 +364,35 @@ public sealed class MainForm : Form
         }
     }
 
+    private void ResizeRuleColumns()
+    {
+        if (_rulesList.Columns.Count == 4)
+            _rulesList.Columns[1].Width = Math.Max(90, _rulesList.ClientSize.Width - 38 - 85 - 40 - 4);
+    }
+
+    private int SelectedRuleIndex => _rulesList.SelectedItems.Count == 0 ? -1 : _rulesList.SelectedItems[0].Index;
+
     private void RefreshRuleList(int selectedIndex)
     {
         _rulesList.BeginUpdate();
         _rulesList.Items.Clear();
-        foreach (var rule in _rules)
-            _rulesList.Items.Add((rule.Enabled ? "● " : "○ ") + rule.Name + "  [" + rule.LogName + "]");
+        for (var i = 0; i < _rules.Count; i++)
+        {
+            var rule = _rules[i];
+            var row = new ListViewItem((i + 1).ToString());
+            row.SubItems.Add(rule.Name);
+            row.SubItems.Add(rule.LogName);
+            row.SubItems.Add(rule.Enabled ? "Yes" : "No");
+            row.ToolTipText = rule.Name;
+            _rulesList.Items.Add(row);
+        }
         _rulesList.EndUpdate();
-        if (selectedIndex >= 0 && selectedIndex < _rulesList.Items.Count) _rulesList.SelectedIndex = selectedIndex;
+        if (selectedIndex >= 0 && selectedIndex < _rulesList.Items.Count)
+        {
+            _rulesList.Items[selectedIndex].Selected = true;
+            _rulesList.Items[selectedIndex].Focused = true;
+            _rulesList.Items[selectedIndex].EnsureVisible();
+        }
     }
 
     private void SelectRule(int index)
@@ -422,7 +462,7 @@ public sealed class MainForm : Form
     private void NewRule()
     {
         _selectedRuleIndex = -1;
-        _rulesList.ClearSelected();
+        foreach (ListViewItem item in _rulesList.SelectedItems.Cast<ListViewItem>().ToArray()) item.Selected = false;
         _loadingEditor = true;
         try
         {
@@ -491,7 +531,7 @@ public sealed class MainForm : Form
             added++;
         }
         RefreshRuleList(added > 0 ? _rules.Count - 1 : _selectedRuleIndex);
-        if (added > 0) _rulesList.SelectedIndex = _rules.Count - added;
+        if (added > 0 && SelectedRuleIndex != _rules.Count - added) SelectRule(_rules.Count - added);
         if (added > 0) _configurationDirty = true;
         UpdateSaveRuleState();
         UpdateSaveConfigurationState();
@@ -507,7 +547,7 @@ public sealed class MainForm : Form
         UpdateSaveConfigurationState();
         _selectedRuleIndex = -1;
         RefreshRuleList(Math.Min(index, _rules.Count - 1));
-        if (_rulesList.SelectedIndex < 0) NewRule();
+        if (SelectedRuleIndex < 0) NewRule();
     }
 
     private void SaveCurrentRule()
@@ -802,6 +842,13 @@ public sealed class MainForm : Form
         UpdateSaveRuleState();
     }
 
+    private void ResizePreviewColumns()
+    {
+        if (_preview.Columns.Count != 7) return;
+        const int fixedWidth = 145 + 150 + 70 + 90 + 150 + 65 + 4;
+        _preview.Columns[6].Width = Math.Max(180, _preview.ClientSize.Width - fixedWidth);
+    }
+
     private void PreviewCurrentRule()
     {
         try
@@ -836,9 +883,57 @@ public sealed class MainForm : Form
         row.SubItems.Add(item.ApplicationPools.Count == 0 ? "(unknown)" : string.Join(", ", item.ApplicationPools));
         row.SubItems.Add(item.ProcessId?.ToString() ?? "");
         row.SubItems.Add(item.Message.Replace("\r", " ").Replace("\n", " "));
+        row.ImageKey = IconKey(item.Level);
         row.Tag = item;
         _preview.Items.Add(row);
     }
+
+    private void ShowSelectedEvent()
+    {
+        if (_preview.SelectedItems.Count == 0 || _preview.SelectedItems[0].Tag is not SampleEvent item) return;
+        using var dialog = new Form
+        {
+            Text = $"Event {item.EventId} — {item.Provider}", StartPosition = FormStartPosition.CenterParent,
+            Size = new Size(780, 500), MinimumSize = new Size(480, 320), Font = Font
+        };
+        var message = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true,
+            ScrollBars = ScrollBars.Both, WordWrap = true, Text = item.Message, Margin = new Padding(8) };
+        var details = new Label { Dock = DockStyle.Top, Height = 50, Padding = new Padding(10),
+            Text = $"{item.Time:G}  •  {item.Level}  •  Event {item.EventId}  •  {item.LogName}" };
+        dialog.Controls.Add(message);
+        dialog.Controls.Add(details);
+        dialog.ShowDialog(this);
+    }
+
+    private void InitializeLevelIcons()
+    {
+        foreach (var (key, color, glyph) in new[]
+        {
+            ("critical", Color.DarkRed, "×"), ("error", Color.Firebrick, "!"),
+            ("warning", Color.DarkOrange, "!"), ("information", Color.SteelBlue, "i"),
+            ("verbose", Color.DimGray, "·"), ("unknown", Color.Gray, "?")
+        })
+        {
+            var bitmap = new Bitmap(16, 16);
+            using (var graphics = Graphics.FromImage(bitmap))
+            {
+                graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using var brush = new SolidBrush(color);
+                graphics.FillEllipse(brush, 1, 1, 14, 14);
+                using var iconFont = new Font(Font.FontFamily, 9, FontStyle.Bold);
+                TextRenderer.DrawText(graphics, glyph, iconFont,
+                    new Rectangle(0, -1, 16, 17), Color.White,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            }
+            _levelIcons.Images.Add(key, bitmap);
+        }
+    }
+
+    private static string IconKey(string level) => level.Trim().ToLowerInvariant() switch
+    {
+        "critical" => "critical", "error" => "error", "warning" => "warning",
+        "information" or "info" => "information", "verbose" => "verbose", _ => "unknown"
+    };
 
     private void AddManualProvider()
     {
@@ -875,8 +970,8 @@ public sealed class MainForm : Form
     private void DraftWithAi()
     {
         var knownLogs = _logName.Items.Cast<object>().Select(x => x.ToString() ?? "").Where(x => x.Length > 0).ToList();
-        var context = new RuleChatContext(_rules.Select(RuleChatContext.Copy).ToList(), _rulesList.SelectedIndex);
-        using var chat = new AiChatDialog(_aiSettings, context, knownLogs, _aiRequest.Text);
+        var context = new RuleChatContext(_rules.Select(RuleChatContext.Copy).ToList(), SelectedRuleIndex);
+        using var chat = new AiChatDialog(_aiSettings, context, knownLogs, "");
         if (chat.ShowDialog(this) != DialogResult.OK || chat.Outcome is null) return;
 
         var outcome = chat.Outcome;
@@ -891,7 +986,7 @@ public sealed class MainForm : Form
             _rules[index] = outcome.Edit.Rule;
             _configurationDirty = true;
             RefreshRuleList(index);
-            SelectRule(index);
+            LoadEditor(_rules[index]);
             UpdateSaveRuleState();
             UpdateSaveConfigurationState();
             SetStatus($"Updated '{outcome.Edit.Rule.Name}' in memory. Review it, then click Save configuration.");
@@ -902,7 +997,7 @@ public sealed class MainForm : Form
             _rules.AddRange(outcome.NewRules);
             if (outcome.NewRules.Count > 0) _configurationDirty = true;
             RefreshRuleList(firstNew);
-            if (outcome.NewRules.Count > 0) SelectRule(firstNew);
+            if (outcome.NewRules.Count > 0) LoadEditor(_rules[firstNew]);
             UpdateSaveRuleState();
             UpdateSaveConfigurationState();
             SetStatus($"Drafted {outcome.NewRules.Count} rule(s). Review them, then click Save configuration.");
