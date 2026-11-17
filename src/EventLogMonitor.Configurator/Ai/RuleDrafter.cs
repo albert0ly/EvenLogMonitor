@@ -21,21 +21,61 @@ public sealed class RuleDrafter
         if (string.IsNullOrWhiteSpace(request))
             return new DraftOutcome([], "Describe what you want to watch first.", []);
 
+        var iis = IisApplicationPoolCatalog.Read();
+        var messages = PromptBuilder.BuildMessages(request, iis.ApplicationPools, iis.Error is null);
+        return await DraftConversationAsync(messages, existingRuleNames, knownLogNames, iis, ct);
+    }
+
+    public async Task<DraftOutcome> DraftConversationAsync(IReadOnlyList<ChatTurn> conversation,
+        IReadOnlyCollection<string> existingRuleNames, IReadOnlyCollection<string> knownLogNames,
+        CancellationToken ct = default)
+    {
+        var iis = IisApplicationPoolCatalog.Read();
+        var system = PromptBuilder.BuildMessages("", iis.ApplicationPools, iis.Error is null)[0];
+        var messages = new List<ChatTurn> { system };
+        messages.AddRange(conversation.Where(turn => turn.Role is "user" or "assistant"));
+        return await DraftConversationAsync(messages, existingRuleNames, knownLogNames, iis, ct);
+    }
+
+    private async Task<DraftOutcome> DraftConversationAsync(IReadOnlyList<ChatTurn> messages,
+        IReadOnlyCollection<string> existingRuleNames, IReadOnlyCollection<string> knownLogNames,
+        IisApplicationPoolCatalog.Snapshot iis, CancellationToken ct)
+    {
+        var userText = string.Join(" ", messages.Where(m => m.Role == "user").Select(m => m.Content));
+        if (LooksLikeIisExpress(userText))
+        {
+            var levels = userText.Contains("critical", StringComparison.OrdinalIgnoreCase)
+                ? new List<string> { "Critical", "Error" }
+                : new List<string>();
+            var expressResult = new DraftResult
+            {
+                Rules = [new RuleDraft
+                {
+                    Name = "ASP.NET Core IIS Express monitoring",
+                    Scenario = nameof(Scenario.AspNetCoreIisExpress),
+                    Levels = levels,
+                    ApplicationPools = [],
+                    NotifyEmail = true,
+                    CooldownSeconds = 60
+                }]
+            };
+            var outcome = ToRules(expressResult, iis, iis.Error is null, existingRuleNames, knownLogNames);
+            return outcome with
+            {
+                Warnings = outcome.Warnings.Concat(["IIS Express is not full IIS: this monitors .NET/application crashes and errors. It cannot start, stop, reset, or restart the IIS Express process."]).ToList()
+            };
+        }
+
         using var client = new OllamaClient(_settings);
         var problem = await client.CheckAsync(ct);
         if (problem is not null) throw new InvalidOperationException(problem);
-
-        var iis = IisApplicationPoolCatalog.Read();
-        var poolsKnown = iis.Error is null;
-        var messages = PromptBuilder.BuildMessages(request, iis.ApplicationPools, poolsKnown);
         var raw = await client.ChatJsonAsync(messages, PromptBuilder.BuildSchema(), ct);
 
         DraftResult? result;
         try { result = JsonSerializer.Deserialize<DraftResult>(raw, Json); }
         catch (JsonException ex) { throw new InvalidOperationException("The model returned invalid JSON: " + ex.Message); }
         if (result is null) throw new InvalidOperationException("The model returned no result.");
-
-        return ToRules(result, iis, poolsKnown, existingRuleNames, knownLogNames);
+        return ToRules(result, iis, iis.Error is null, existingRuleNames, knownLogNames);
     }
 
     /// <summary>Pure conversion/validation step (no network), kept separate so it can be tested.</summary>
@@ -111,6 +151,18 @@ public sealed class RuleDrafter
 
         return new DraftOutcome(rules, null, warnings);
     }
+
+    private static bool LooksLikeIisExpress(string text) =>
+        text.Contains("iis express", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("localhost:", StringComparison.OrdinalIgnoreCase) &&
+        (text.Contains("visual studio", StringComparison.OrdinalIgnoreCase) ||
+         text.Contains("asp.net core", StringComparison.OrdinalIgnoreCase) ||
+         text.Contains(".net 5", StringComparison.OrdinalIgnoreCase) ||
+         text.Contains(".net 6", StringComparison.OrdinalIgnoreCase) ||
+         text.Contains(".net 7", StringComparison.OrdinalIgnoreCase) ||
+         text.Contains(".net 8", StringComparison.OrdinalIgnoreCase) ||
+         text.Contains(".net 9", StringComparison.OrdinalIgnoreCase) ||
+         text.Contains(".net 10", StringComparison.OrdinalIgnoreCase));
 
     private static EventRule Build(string name, string log, List<string> providers, List<int> ids, List<string> levels,
         string message, List<string> pools, int cooldown, bool email, bool sms) => new()

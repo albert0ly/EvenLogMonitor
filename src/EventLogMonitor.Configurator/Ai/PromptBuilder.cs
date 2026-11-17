@@ -43,22 +43,31 @@ public static class PromptBuilder
         """)!;
     }
 
-    public static IReadOnlyList<ChatTurn> BuildMessages(string userRequest, IReadOnlyList<string> pools, bool poolsKnown)
+    public static IReadOnlyList<ChatTurn> BuildMessages(string userRequest, IReadOnlyList<string> pools, bool poolsKnown,
+        RuleChatContext? context = null)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("You convert a plain-English request into Windows Event Log monitoring rules for the EventLogMonitor tool.");
+        sb.AppendLine("You help the user inspect, explain, and edit the current Notification Rules in EventLogMonitor Configurator, as well as draft new rules.");
         sb.AppendLine("Reply ONLY with JSON that matches the supplied schema.");
         sb.AppendLine();
         sb.AppendLine("Rules:");
-        sb.AppendLine("- Choose a scenario from the list below. Prefer a listed scenario over Custom.");
+        sb.AppendLine("- The current Notification Rules and selection are supplied below. Answer questions about them using those exact details. 'Last rule' means the final list item, not the selected item. Do NOT ask about applications or pools when asked to inspect a rule. The context is a snapshot of rules already saved in the rule list; unsaved rule-editor typing is not included.");
+        sb.AppendLine("- For an edit request, return a short explanation in answer, an edit with a 1-based ruleIndex, description and changes object containing only changed fields; rules must be empty and clarification empty. Never invent a rule or change unrelated fields. If the target is ambiguous, ask which rule instead.");
+        sb.AppendLine("- An edit may change name, enabled, logName, eventIds, providers, levels, messageContains, messageRegex, applicationPools, cooldownSeconds, notifyEmail or notifySms. Keep JSON value types consistent with the current rule. When changing filters, explain what will be matched.");
+        sb.AppendLine("- For a new-rule request return rules and no edit. For a question return answer and empty rules with no edit. For a clarification return one question in clarification, empty rules and no edit.");
+        sb.AppendLine("- For an inspection or explanation request, return an answer, no edit, and no new rules. Do not claim you can see unsaved editor changes or live application health.");
+        sb.AppendLine("- Choose a scenario from the list below only when drafting NEW rules. Prefer a listed scenario over Custom.");
         sb.AppendLine("- For a listed scenario leave logName, providers and eventIds empty. Never invent event IDs; the tool fills them in.");
         sb.AppendLine("- Use Custom ONLY when the user clearly names a log, source or event ID (for example Security 4625). Then fill logName (Application, System, Security or an exact channel name), providers and eventIds. Do not guess.");
-        sb.AppendLine("- applicationPools: use only names from the pool list, spelled exactly. Map an application or site name to its pool when the names clearly correspond. If you cannot tell which pool is meant, return no rules and ask in clarification.");
+        sb.AppendLine("- applicationPools: use only names from the pool list, spelled exactly. Map an application or site name to its pool when the names clearly correspond. If the user says IIS Express, Visual Studio, localhost URL, or an ASP.NET Core/.NET 5+ app launched by Visual Studio, this is NOT full IIS: do not ask for or require an application pool and prefer AspNetCoreIisExpress.");
+        sb.AppendLine("- IIS Express has no full-IIS/WAS application-pool lifecycle to monitor. Interpret 'IIS reset', 'restart', 'start/end/reset' for IIS Express as application/process crash or restart-related monitoring, and explain that the monitor can detect crashes/errors but cannot itself reset or restart IIS Express.");
+        sb.AppendLine("- A localhost endpoint such as https://localhost:7166/ identifies the app but is not an event-log channel, provider, or pool name. Preserve it as context; do not repeatedly ask which pool it uses.");
         sb.AppendLine("- levels: leave empty unless the user explicitly restricts severity (for example 'only errors').");
         sb.AppendLine("- notifyEmail is true by default. notifySms is true only if the user mentions SMS or a text message. If the user asks only for SMS, set notifyEmail to false.");
         sb.AppendLine("- cooldownSeconds is 60 unless the user states another value.");
         sb.AppendLine("- messageContains: empty unless the user names a phrase.");
         sb.AppendLine("- If the request is ambiguous or cannot be expressed, return an empty rules array and ONE short question in clarification. Otherwise clarification is an empty string.");
+        sb.AppendLine("- Previous assistant messages may contain questions. Use subsequent user answers as clarification of the original request; do not repeat an already answered question.");
         sb.AppendLine("- Several rules are allowed when several scenarios are needed. name is a short human-readable title.");
         sb.AppendLine();
         sb.AppendLine("Scenarios:");
@@ -84,6 +93,19 @@ public static class PromptBuilder
         {"name":"Failed logons","scenario":"Custom","levels":[],"applicationPools":[],"messageContains":"","notifyEmail":false,"notifySms":true,"cooldownSeconds":300,"logName":"Security","providers":["Microsoft-Windows-Security-Auditing"],"eventIds":[4625]}]}
         """);
         sb.AppendLine();
+        sb.AppendLine("User: I have an ASP.NET Core .NET 10 app running in Visual Studio with IIS Express at https://localhost:7166/. Watch critical errors and tell me when IIS Express crashes or needs to be started again.");
+        sb.AppendLine("""
+        {"clarification":"","rules":[
+        {"name":"ASP.NET Core IIS Express - .NET errors","scenario":"AspNetCoreIisExpress","levels":["Critical","Error"],"applicationPools":[],"messageContains":"","notifyEmail":true,"notifySms":false,"cooldownSeconds":60,"logName":"","providers":[],"eventIds":[]}]}
+        """);
+        sb.AppendLine();
+        if (context is not null)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Current configurator state (snapshot at chat open; not live Windows events):");
+            sb.AppendLine(context.Describe());
+            sb.AppendLine("Only change existing rules after the user explicitly requests an edit. The user must click Apply, then Save configuration.");
+        }
         sb.AppendLine("User: Tell me when my app breaks.");
         sb.AppendLine("""
         {"clarification":"Which application (or IIS application pool) should I watch, and do you want web errors, crashes, or both?","rules":[]}

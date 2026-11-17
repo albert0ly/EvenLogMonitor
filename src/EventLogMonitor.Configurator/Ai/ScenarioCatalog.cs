@@ -10,6 +10,7 @@ public enum Scenario
     AspNetUnhandledException,
     DotNetRuntimeCrash,
     W3wpCrash,
+    AspNetCoreIisExpress,
     Custom
 }
 
@@ -44,6 +45,10 @@ public static class ScenarioCatalog
             [Scenario.W3wpCrash] = (
                 "Windows Application Error reports for the IIS worker process w3wp.exe (process crash).",
                 [new("Application", [], [1000, 1001], [], "w3wp.exe")]),
+
+            [Scenario.AspNetCoreIisExpress] = (
+                "ASP.NET Core application launched by Visual Studio using IIS Express. The https://localhost:<port> URL is not an IIS application pool and IIS Express does not produce the full IIS/WAS pool events. Monitor application crashes and .NET runtime errors instead; do not ask for a pool name.",
+                [new("Application", [".NET Runtime"], [1026], ["Error"]), new("Application", [], [1000, 1001], [], "iisexpress.exe")]),
 
             [Scenario.Custom] = (
                 "Anything not covered above. The model must then fill logName, providers and eventIds itself " +
