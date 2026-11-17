@@ -6,7 +6,7 @@ Nothing is trained, nothing leaves the machine, and the monitoring service itsel
 > Example request:
 > *I have ASP.NET application 'Claims' in local IIS. I want to watch all critical errors and send a notification when only an IIS reset can help.*
 
-The AI drafts the rules, they appear in the normal rule list and editor, and **nothing is written to `appsettings.json` until you click Save configuration**.
+The chat assistant can inspect rules already in the Notification Rules list, answer follow-up questions, draft new rules and propose edits to existing rules. **Nothing is written to `appsettings.json` until you click Save configuration**.
 
 ---
 
@@ -27,12 +27,12 @@ use `qwen2.5:3b` and expect less reliable results. You can run Ollama on a diffe
 ## 2. Using it
 
 1. Type your request in the box at the top of the right-hand pane.
-2. Click **Draft with AI**.
-3. The Configurator adds the drafted rules to the rule list, opens the first one in the editor, loads recent events of its log and runs **Preview matches**.
-4. Review each rule (log, sources, IDs, levels, pools, channels, cooldown). Edit anything you like.
-5. Click **Save configuration** and restart the `EventLogMonitor` service, exactly as before.
+2. Click **Open AI chat**, then press **Send** (Enter sends; Shift+Enter inserts a line break).
+3. Ask follow-up questions or reply to clarification requests in the same chat. For example, “Do you see the last rule?” reads the final item in the Notification Rules list; “show the selected rule” uses the selected item; “list rules” shows names numbered #1, #2, etc. Rule details and proposed changes are formatted as indented JSON.
+4. To create or modify a rule, review the proposed fields in the transcript and click **Apply draft** or **Apply edit**. Closing the chat without applying leaves the rules unchanged. An applied change updates only the in-memory list.
+5. Review each rule (log, sources, IDs, levels, pools, channels, cooldown). Click **Save configuration** and restart the `EventLogMonitor` service, exactly as before. **Apply draft** does not save to disk. Closing or reloading with unsaved changes prompts you before discarding them.
 
-If the request is ambiguous, or names an IIS pool that does not exist, the AI asks a question instead of guessing; rephrase and try again.
+The chat sees a snapshot of rules already in the Notification Rules list at the time it opens, including the selection. Unsaved typing in the rule editor is not included; click **Save rule** first if those edits should be visible to the assistant. If the request is ambiguous, or names an IIS pool that does not exist, answer the AI's question in the same chat. For ASP.NET Core applications launched by Visual Studio with IIS Express (for example `https://localhost:7166/`), no IIS application pool is required: the assistant creates application/.NET crash and error rules. IIS Express is not full IIS, so the monitor can detect failures but cannot start, stop, reset, or restart the IIS Express process.
 
 More examples:
 
@@ -63,11 +63,11 @@ Design points:
   * levels are normalised (`info` → `Information`);
   * custom rules must name a log that exists on this machine and must be specific (not "every event");
   * rule names are made unique; cooldown is clamped to 0–86400; at least one channel is always on.
-* **Human review.** Drafts live only in memory until **Save configuration**. Custom rules are flagged because their IDs came from the model.
+* **Human review.** Drafts and edits require **Apply** and live only in memory until **Save configuration**. Custom rules are flagged because their IDs came from the model. Edits are limited to supported rule fields and validated before they can be applied.
 
 ### What is sent to the model
 
-The text you typed, the scenario descriptions, and the names of the IIS application pools on this machine. No event log content is sent.
+The chat transcript, a snapshot of the Notification Rules list (including each rule's settings and selected index), scenario descriptions, and IIS application pool names. No event log content is sent. The configured Ollama endpoint can be a different machine, so use a local endpoint if the rule names and filters must stay on this machine.
 
 ## 4. Scenario catalog
 
@@ -104,9 +104,10 @@ Notes on accuracy, please read:
 | `Ai/RuleDraft.cs` | The JSON shape returned by the model. |
 | `Ai/PromptBuilder.cs` | System prompt, examples and JSON schema. |
 | `Ai/OllamaClient.cs` | Minimal HTTP client for Ollama (`/api/tags`, `/api/chat`). No NuGet packages. |
-| `Ai/RuleDrafter.cs` | Calls the model, validates, expands to `EventRule`. `ToRules` is the pure, testable part. |
+| `Ai/RuleDrafter.cs` | Validates and expands new-rule drafts to `EventRule`. |
+| `Ai/RuleChatContext.cs`, `Ai/RuleChatService.cs`, `Ai/AiChatDialog.cs` | Rule-list snapshot, contextual chat and explicit Apply actions. |
 | `Ai/AiSettingsDialog.cs` | Settings dialog with *Test connection*. |
-| `MainForm.cs` | New input box, **Draft with AI** and **AI settings…** buttons, `DraftWithAiAsync`. |
+| `MainForm.cs` | AI chat and settings buttons, rule-list updates after Apply. |
 
 Default `ai-settings.json`:
 
