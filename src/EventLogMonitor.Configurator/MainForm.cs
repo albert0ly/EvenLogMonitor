@@ -32,21 +32,23 @@ public sealed class MainForm : Form
     private readonly Label _status = new() { AutoSize = true, ForeColor = Color.DarkSlateGray };
     private readonly Button _loadEvents = new() { Text = "Load recent events", AutoSize = true };
     private readonly Button _previewMatches = new() { Text = "Preview matches", AutoSize = true };
+    private readonly Button _saveRule = new() { Text = "Save rule", Dock = DockStyle.Fill, Enabled = false };
+    private readonly Button _saveConfiguration = new() { Text = "Save configuration", AutoSize = true, Enabled = false };
     private readonly TextBox _aiRequest = new()
     {
         Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Vertical,
         PlaceholderText = "e.g. I have ASP.NET application 'Claims' in local IIS. Watch critical errors and notify me when only an IIS reset can help."
     };
-    private readonly Button _draftButton = new() { Text = "Draft with AI", Dock = DockStyle.Fill };
+    private readonly Button _draftButton = new() { Text = "Open AI chat", Dock = DockStyle.Fill };
     private readonly Button _aiSettingsButton = new() { Text = "AI settings…", Dock = DockStyle.Fill };
     private readonly AiSettings _aiSettings = AiSettings.Load();
-    private bool _drafting;
 
     private readonly List<EventRule> _rules = [];
     private List<SampleEvent> _sampleEvents = [];
     private int _selectedRuleIndex = -1;
     private string? _initialConfigPath;
     private bool _loadingEditor;
+    private bool _configurationDirty;
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
 
@@ -60,12 +62,23 @@ public sealed class MainForm : Form
         Font = new Font("Segoe UI", 9F);
 
         BuildLayout();
+        FormClosing += ConfirmUnsavedChanges;
         _rulesList.SelectedIndexChanged += (_, _) => SelectRule(_rulesList.SelectedIndex);
         _logName.SelectedIndexChanged += (_, _) => ClearEventChoices();
         _loadEvents.Click += (_, _) => LoadRecentEvents();
         _previewMatches.Click += (_, _) => PreviewCurrentRule();
-        _draftButton.Click += async (_, _) => await DraftWithAiAsync();
+        _draftButton.Click += (_, _) => DraftWithAi();
         _aiSettingsButton.Click += (_, _) => OpenAiSettings();
+        _ruleName.TextChanged += (_, _) => UpdateSaveRuleState();
+        _enabled.CheckedChanged += (_, _) => UpdateSaveRuleState();
+        _logName.SelectedIndexChanged += (_, _) => UpdateSaveRuleState();
+        _extraIds.TextChanged += (_, _) => UpdateSaveRuleState();
+        _messageContains.TextChanged += (_, _) => UpdateSaveRuleState();
+        _cooldown.ValueChanged += (_, _) => UpdateSaveRuleState();
+        _notifyEmail.CheckedChanged += (_, _) => UpdateSaveRuleState();
+        _notifySms.CheckedChanged += (_, _) => UpdateSaveRuleState();
+        foreach (var list in new[] { _providers, _eventIds, _levels, _appPools })
+            list.ItemCheck += (_, _) => BeginInvoke((Action)UpdateSaveRuleState);
         LoadLogNames();
         LoadIisPools();
         LoadConfiguration(ResolveInitialConfigPath());
@@ -165,7 +178,7 @@ public sealed class MainForm : Form
         aiPanel.Controls.Add(_aiRequest, 0, 0);
         aiPanel.Controls.Add(_draftButton, 1, 0);
         aiPanel.Controls.Add(_aiSettingsButton, 2, 0);
-        right.Controls.Add(MakeGroup("Describe the rule in plain English (AI drafts it; you review before saving)", aiPanel), 0, 0);
+        right.Controls.Add(MakeGroup("Ask AI about notification rules or request a change (review before saving)", aiPanel), 0, 0);
         right.Controls.Add(header, 0, 1);
 
         var filters = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Padding = new Padding(0, 4, 0, 4) };
@@ -225,15 +238,13 @@ public sealed class MainForm : Form
         channelPanel.Controls.Add(_notifyEmail);
         channelPanel.Controls.Add(_notifySms);
         messageAndOptions.Controls.Add(channelPanel, 2, 1);
-        var saveRule = new Button { Text = "Save rule", Dock = DockStyle.Fill };
-        saveRule.Click += (_, _) => SaveCurrentRule();
-        messageAndOptions.Controls.Add(saveRule, 3, 1);
+        _saveRule.Click += (_, _) => SaveCurrentRule();
+        messageAndOptions.Controls.Add(_saveRule, 3, 1);
         right.Controls.Add(messageAndOptions, 0, 3);
 
         var actionBar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Padding = new Padding(0, 4, 0, 0) };
-        var saveConfig = new Button { Text = "Save configuration", AutoSize = true };
-        saveConfig.Click += (_, _) => SaveConfiguration();
-        actionBar.Controls.Add(saveConfig);
+        _saveConfiguration.Click += (_, _) => SaveConfiguration();
+        actionBar.Controls.Add(_saveConfiguration);
         actionBar.Controls.Add(_previewMatches);
         actionBar.Controls.Add(_status);
         right.Controls.Add(actionBar, 0, 4);
@@ -301,6 +312,7 @@ public sealed class MainForm : Form
         foreach (var pool in names)
             _appPools.Items.Add(new FilterChoice(pool, pool), previous.Contains(pool));
         _appPools.EndUpdate();
+        UpdateSaveRuleState();
         SetStatus(snapshot.Error is null
             ? $"Detected {snapshot.ApplicationPools.Count} IIS application pool(s)."
             : "IIS pools could not be enumerated: " + snapshot.Error + " You can add a pool name manually.");
@@ -308,6 +320,7 @@ public sealed class MainForm : Form
 
     private void LoadConfiguration(string path)
     {
+        if (HasUnsavedChanges() && !ConfirmDiscardChanges()) return;
         try
         {
             if (!File.Exists(path))
@@ -322,6 +335,8 @@ public sealed class MainForm : Form
             RefreshRuleList(-1);
             if (_rules.Count > 0) _rulesList.SelectedIndex = 0;
             else NewRule();
+            _configurationDirty = false;
+            UpdateSaveConfigurationState();
             SetStatus($"Loaded {_rules.Count} rule(s). Save applies changes to this file; restart the Event Log Monitor service afterward.");
         }
         catch (Exception ex)
@@ -366,6 +381,7 @@ public sealed class MainForm : Form
             _notifySms.Checked = rule.NotifySms;
         }
         finally { _loadingEditor = false; }
+        UpdateSaveRuleState();
     }
 
     private void SelectLog(string logName)
@@ -394,6 +410,15 @@ public sealed class MainForm : Form
         }
     }
 
+    private static bool EditorMatchesRule(EventRule editor, EventRule rule) =>
+        editor.Name == rule.Name && editor.Enabled == rule.Enabled && editor.LogName == rule.LogName &&
+        editor.EventIds.SequenceEqual(rule.EventIds.Order()) &&
+        editor.Providers.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(rule.Providers) &&
+        editor.Levels.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(rule.Levels) &&
+        editor.ApplicationPools.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(rule.ApplicationPools) &&
+        editor.MessageContains == rule.MessageContains && editor.CooldownSeconds == rule.CooldownSeconds &&
+        editor.NotifyEmail == rule.NotifyEmail && editor.NotifySms == rule.NotifySms;
+
     private void NewRule()
     {
         _selectedRuleIndex = -1;
@@ -412,6 +437,7 @@ public sealed class MainForm : Form
             _notifySms.Checked = false;
         }
         finally { _loadingEditor = false; }
+        UpdateSaveRuleState();
         _preview.Items.Clear();
     }
 
@@ -466,6 +492,9 @@ public sealed class MainForm : Form
         }
         RefreshRuleList(added > 0 ? _rules.Count - 1 : _selectedRuleIndex);
         if (added > 0) _rulesList.SelectedIndex = _rules.Count - added;
+        if (added > 0) _configurationDirty = true;
+        UpdateSaveRuleState();
+        UpdateSaveConfigurationState();
         SetStatus($"Added {added} IIS/.NET starter rule(s). Review them and click Save configuration.");
     }
 
@@ -474,6 +503,8 @@ public sealed class MainForm : Form
         if (_selectedRuleIndex < 0 || _selectedRuleIndex >= _rules.Count) return;
         var index = _selectedRuleIndex;
         _rules.RemoveAt(index);
+        _configurationDirty = true;
+        UpdateSaveConfigurationState();
         _selectedRuleIndex = -1;
         RefreshRuleList(Math.Min(index, _rules.Count - 1));
         if (_rulesList.SelectedIndex < 0) NewRule();
@@ -491,12 +522,41 @@ public sealed class MainForm : Form
                 _rules.Add(rule);
                 _selectedRuleIndex = _rules.Count - 1;
             }
+            _configurationDirty = true;
             RefreshRuleList(_selectedRuleIndex);
+            UpdateSaveRuleState();
+            UpdateSaveConfigurationState();
             SetStatus("Rule saved in editor. Click Save configuration to write appsettings.json.");
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.Message, "Invalid rule", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void UpdateSaveConfigurationState()
+    {
+        _saveConfiguration.Enabled = _configurationDirty;
+    }
+
+    private void UpdateSaveRuleState()
+    {
+        if (_loadingEditor) return;
+        if (string.IsNullOrWhiteSpace(_ruleName.Text) || _logName.SelectedItem is null)
+        {
+            _saveRule.Enabled = false;
+            return;
+        }
+
+        try
+        {
+            var current = ReadEditor();
+            _saveRule.Enabled = _selectedRuleIndex < 0 || _selectedRuleIndex >= _rules.Count ||
+                !EditorMatchesRule(current, _rules[_selectedRuleIndex]);
+        }
+        catch (Exception)
+        {
+            _saveRule.Enabled = false;
         }
     }
 
@@ -545,6 +605,7 @@ public sealed class MainForm : Form
                 _selectedRuleIndex = _rules.Count - 1;
             }
             RefreshRuleList(_selectedRuleIndex);
+            UpdateSaveRuleState();
 
             var path = Path.GetFullPath(_configPath.Text.Trim());
             JsonObject root;
@@ -573,6 +634,8 @@ public sealed class MainForm : Form
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, root.ToJsonString(JsonOptions));
             _configPath.Text = path;
+            _configurationDirty = false;
+            UpdateSaveConfigurationState();
             SetStatus("Configuration saved. Restart the Event Log Monitor Windows service to apply the new rules.");
             MessageBox.Show(this, "Configuration saved successfully.\r\n\r\nRestart the Event Log Monitor service to apply the changes.",
                 "Saved", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -596,14 +659,25 @@ public sealed class MainForm : Form
                 .Select(g => new FilterChoice(g.Key.ToString(), $"{g.Key} ({g.Count()})")), preserveChecks: true);
             PopulateChoices(_levels, _sampleEvents.Select(x => x.Level).Where(x => !string.IsNullOrWhiteSpace(x))
                 .Distinct(StringComparer.OrdinalIgnoreCase).Select(x => new FilterChoice(x!, x!)), preserveChecks: true);
+            UpdateSaveRuleState();
 
             _preview.Items.Clear();
             foreach (var item in _sampleEvents.Take(30)) AddPreviewRow(item);
             SetStatus($"Loaded {_sampleEvents.Count} recent events from {log}. Select providers, IDs and levels, then Preview matches.");
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            MessageBox.Show(this, $"Access denied reading '{log}'. Run the configurator as Administrator or grant access to this event log.\r\n\r\n{ex.Message}",
+                "Event log read failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        catch (EventLogException ex)
+        {
+            MessageBox.Show(this, $"Could not read event log '{log}'. Verify that the channel exists and is enabled.\r\n\r\n{ex}",
+                "Event log read failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
         catch (Exception ex)
         {
-            MessageBox.Show(this, "Could not read this event log. Try running the configurator as Administrator.\r\n\r\n" + ex.Message,
+            MessageBox.Show(this, $"Could not load recent events from '{log}'.\r\n\r\n{ex}",
                 "Event log read failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         finally { UseWaitCursor = false; }
@@ -626,8 +700,11 @@ public sealed class MainForm : Form
             var pid = ReadProcessId(xml);
             var pools = ReadPoolNames(xml, message).ToHashSet(StringComparer.OrdinalIgnoreCase);
             if (pid is not null && poolSnapshot.WorkerProcesses.TryGetValue(pid.Value, out var mapped)) pools.Add(mapped);
+            string level;
+            try { level = record.LevelDisplayName ?? LevelName(record.Level); }
+            catch (EventLogException) { level = LevelName(record.Level); }
             list.Add(new SampleEvent(logName, record.TimeCreated ?? DateTime.Now, record.ProviderName ?? "Unknown", record.Id,
-                record.LevelDisplayName ?? LevelName(record.Level), message, pid, pools.ToArray()));
+                level, message, pid, pools.ToArray()));
         }
         return list;
     }
@@ -722,6 +799,7 @@ public sealed class MainForm : Form
         PopulateChoices(_eventIds, [], preserveChecks: false);
         PopulateChoices(_levels, [], preserveChecks: false);
         _preview.Items.Clear();
+        UpdateSaveRuleState();
     }
 
     private void PreviewCurrentRule()
@@ -774,6 +852,7 @@ public sealed class MainForm : Form
         else
             _providers.Items.Add(new FilterChoice(name, name), true);
         _manualProvider.Clear();
+        UpdateSaveRuleState();
     }
 
     private void AddManualPool()
@@ -783,6 +862,7 @@ public sealed class MainForm : Form
         if (!_appPools.Items.Cast<FilterChoice>().Any(x => string.Equals(x.Value, name, StringComparison.OrdinalIgnoreCase)))
             _appPools.Items.Add(new FilterChoice(name, name), true);
         _manualPool.Clear();
+        UpdateSaveRuleState();
     }
 
     private void OpenAiSettings()
@@ -792,65 +872,55 @@ public sealed class MainForm : Form
             SetStatus($"AI settings saved. Model: {_aiSettings.Model} at {_aiSettings.Endpoint}.");
     }
 
-    private async Task DraftWithAiAsync()
+    private void DraftWithAi()
     {
-        if (_drafting) return;
-        var request = _aiRequest.Text.Trim();
-        if (request.Length == 0)
-        {
-            SetStatus("Describe what you want to watch, then click Draft with AI.");
-            return;
-        }
+        var knownLogs = _logName.Items.Cast<object>().Select(x => x.ToString() ?? "").Where(x => x.Length > 0).ToList();
+        var context = new RuleChatContext(_rules.Select(RuleChatContext.Copy).ToList(), _rulesList.SelectedIndex);
+        using var chat = new AiChatDialog(_aiSettings, context, knownLogs, _aiRequest.Text);
+        if (chat.ShowDialog(this) != DialogResult.OK || chat.Outcome is null) return;
 
-        _drafting = true;
-        _draftButton.Enabled = false;
-        UseWaitCursor = true;
-        SetStatus($"Asking local model '{_aiSettings.Model}'… the first request can take a while while the model loads.");
-        try
+        var outcome = chat.Outcome;
+        if (outcome.Edit is not null)
         {
-            var knownLogs = _logName.Items.Cast<object>().Select(x => x.ToString() ?? "").Where(x => x.Length > 0).ToList();
-            var outcome = await new RuleDrafter(_aiSettings).DraftAsync(request, _rules.Select(r => r.Name).ToList(), knownLogs);
-
-            if (outcome.Clarification is not null)
+            var index = outcome.Edit.RuleIndex;
+            if (index < 0 || index >= _rules.Count || !RulesEquivalent(_rules[index], context.Rules[index]))
             {
-                SetStatus("The AI needs more information.");
-                MessageBox.Show(this, outcome.Clarification, "More information needed", MessageBoxButtons.OK, MessageBoxIcon.Question);
+                SetStatus("The target rule changed while the chat was open. Reopen AI chat before applying this edit.");
                 return;
             }
-
-            // Drafts are added to the in-memory list only. Nothing reaches appsettings.json until the user clicks Save configuration.
+            _rules[index] = outcome.Edit.Rule;
+            _configurationDirty = true;
+            RefreshRuleList(index);
+            SelectRule(index);
+            UpdateSaveRuleState();
+            UpdateSaveConfigurationState();
+            SetStatus($"Updated '{outcome.Edit.Rule.Name}' in memory. Review it, then click Save configuration.");
+        }
+        else
+        {
             var firstNew = _rules.Count;
-            _rules.AddRange(outcome.Rules);
+            _rules.AddRange(outcome.NewRules);
+            if (outcome.NewRules.Count > 0) _configurationDirty = true;
             RefreshRuleList(firstNew);
+            if (outcome.NewRules.Count > 0) SelectRule(firstNew);
+            UpdateSaveRuleState();
+            UpdateSaveConfigurationState();
+            SetStatus($"Drafted {outcome.NewRules.Count} rule(s). Review them, then click Save configuration.");
+        }
+    }
 
-            var previewNote = "";
-            try
-            {
-                LoadRecentEvents();
-                PreviewCurrentRule();
-                previewNote = $" The first rule matches {_preview.Items.Count} of the {_sampleEvents.Count} recently loaded event(s) in its log.";
-            }
-            catch { /* preview is best effort */ }
+    private static bool RulesEquivalent(EventRule a, EventRule b) =>
+        JsonSerializer.Serialize(a) == JsonSerializer.Serialize(b);
 
-            var summary = "Drafted " + outcome.Rules.Count + " rule(s):\r\n • " + string.Join("\r\n • ", outcome.Rules.Select(r => r.Name)) +
-                          "\r\n\r\nThey are in the rule list but NOT saved to appsettings.json yet. Review each rule, then click Save configuration." +
-                          previewNote;
-            if (outcome.Warnings.Count > 0)
-                summary += "\r\n\r\nNotes:\r\n • " + string.Join("\r\n • ", outcome.Warnings);
-            SetStatus($"Drafted {outcome.Rules.Count} rule(s). Review them, then click Save configuration.");
-            MessageBox.Show(this, summary, "AI draft ready", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        catch (Exception ex)
-        {
-            SetStatus("AI draft failed.");
-            MessageBox.Show(this, ex.Message, "AI draft failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
-        finally
-        {
-            _drafting = false;
-            _draftButton.Enabled = true;
-            UseWaitCursor = false;
-        }
+    private bool HasUnsavedChanges() => _configurationDirty || _saveRule.Enabled;
+
+    private bool ConfirmDiscardChanges() => MessageBox.Show(this,
+        "There are unsaved rule changes. Discard them? Click Cancel to return and use Save configuration.",
+        "Unsaved rules", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK;
+
+    private void ConfirmUnsavedChanges(object? sender, FormClosingEventArgs e)
+    {
+        if (HasUnsavedChanges() && !ConfirmDiscardChanges()) e.Cancel = true;
     }
 
     private void SetStatus(string text) => _status.Text = "  " + text;
