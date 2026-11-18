@@ -144,7 +144,11 @@ Service diagnostics appear in Event Viewer under **Windows Logs → Application*
 
 ## Test safely
 
-Start by configuring one harmless test rule for an event you can generate in a non-production environment. Confirm that the service starts, the matching rule appears in the Application log, and the notification reaches the configured destination. Then enable the production rules.
+Start by configuring one harmless test rule for an event you can generate in a non-production environment. In the configurator, select an enabled rule, save the rule and configuration, restart the monitor, then click **Create Test Event** under Notification rules. It attempts a real Windows Event Log write using the rule's first provider (or `EventLogMonitor.Test` if no provider is selected), a supported Event ID and level, and a deterministic message containing the required phrase/pool name. The final message line is `For test purposes. Not real event`. There is no per-click confirmation; the write can trigger real email/SMS notifications and provider charges.
+
+Windows classic Event Log writes may reject a protected provider, a source registered to another log, a restricted channel, or unsupported levels/IDs. A new source registration may require Administrator rights and a second click after Windows activates it. A rule with an incompatible regex cannot be generated automatically. The configurator reports rejection or a mismatch instead of claiming delivery. For unsupported provider rules, create a separate enabled Application-log rule for source `EventLogMonitor.Test`, save the configuration, restart the monitor, and test that companion rule. This tests notification delivery, not the original provider filter.
+
+The monitor must already be running and watching the log when the event is written; it does not replay past events. Cooldown and disabled notification channels can prevent a notification. A verified write only confirms the entry in Event Viewer, not delivery. Confirm the matching rule appears in the monitor diagnostics and the notification reaches its destination. Then enable the production rules.
 
 For Security log monitoring, verify that the relevant Windows audit policy actually generates the events you expect. For example, Event ID 4625 requires failed-logon auditing to be enabled.
 

@@ -46,10 +46,12 @@ public sealed class MainForm : Form
     private readonly Button _loadEvents = new() { Text = "Load recent events", AutoSize = true };
     private readonly Button _previewMatches = new() { Text = "Preview matches", AutoSize = true };
     private readonly Button _saveRule = new() { Text = "Save rule", Dock = DockStyle.Fill, Enabled = false };
+    private readonly Button _createTestEvent = new() { Text = "Create Test Event", Width = 220, Enabled = false };
     private readonly Button _saveConfiguration = new() { Text = "Save configuration", AutoSize = true, Enabled = false };
     private readonly Button _draftButton = new() { Text = "Open AI chat", Dock = DockStyle.Fill };
     private readonly Button _aiSettingsButton = new() { Text = "AI settings…", Dock = DockStyle.Fill };
     private readonly AiSettings _aiSettings = AiSettings.Load();
+    private string? _loadedConfigPath;
 
     private readonly List<EventRule> _rules = [];
     private List<SampleEvent> _sampleEvents = [];
@@ -75,6 +77,7 @@ public sealed class MainForm : Form
         _logName.SelectedIndexChanged += (_, _) => ClearEventChoices();
         _loadEvents.Click += (_, _) => LoadRecentEvents();
         _previewMatches.Click += (_, _) => PreviewCurrentRule();
+        _createTestEvent.Click += (_, _) => CreateTestEvent();
         _draftButton.Click += (_, _) => DraftWithAi();
         _aiSettingsButton.Click += (_, _) => OpenAiSettings();
         _ruleName.TextChanged += (_, _) => UpdateSaveRuleState();
@@ -87,6 +90,7 @@ public sealed class MainForm : Form
         _notifySms.CheckedChanged += (_, _) => UpdateSaveRuleState();
         foreach (var list in new[] { _providers, _eventIds, _levels, _appPools })
             list.ItemCheck += (_, _) => BeginInvoke((Action)UpdateSaveRuleState);
+        _configPath.TextChanged += (_, _) => UpdateTestEventState();
         InitializeLevelIcons();
         LoadLogNames();
         LoadIisPools();
@@ -140,7 +144,7 @@ public sealed class MainForm : Form
         var left = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(0, 4, 8, 0) };
         left.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         left.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 108));
+        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 144));
         left.Controls.Add(new Label { Text = "Notification rules", Font = new Font(Font, FontStyle.Bold), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
         _rulesList.Columns.Add("#", 38);
         _rulesList.Columns.Add("Rule", 145);
@@ -158,6 +162,7 @@ public sealed class MainForm : Form
         leftButtons.Controls.Add(newRule);
         leftButtons.Controls.Add(deleteRule);
         leftButtons.Controls.Add(addIisRules);
+        leftButtons.Controls.Add(_createTestEvent);
         left.Controls.Add(leftButtons, 0, 2);
         split.Panel1.Controls.Add(left);
 
@@ -352,6 +357,7 @@ public sealed class MainForm : Form
             _rules.Clear();
             _rules.AddRange(section.Rules ?? []);
             _configPath.Text = path;
+            _loadedConfigPath = Path.GetFullPath(path);
             RefreshRuleList(_rules.Count > 0 ? 0 : -1);
             if (_rules.Count == 0) NewRule();
             _configurationDirty = false;
@@ -400,6 +406,7 @@ public sealed class MainForm : Form
         if (_loadingEditor || index < 0 || index >= _rules.Count) return;
         _selectedRuleIndex = index;
         LoadEditor(_rules[index]);
+        UpdateTestEventState();
     }
 
     private void LoadEditor(EventRule rule)
@@ -478,6 +485,7 @@ public sealed class MainForm : Form
         }
         finally { _loadingEditor = false; }
         UpdateSaveRuleState();
+        UpdateTestEventState();
         _preview.Items.Clear();
     }
 
@@ -548,6 +556,7 @@ public sealed class MainForm : Form
         _selectedRuleIndex = -1;
         RefreshRuleList(Math.Min(index, _rules.Count - 1));
         if (SelectedRuleIndex < 0) NewRule();
+        UpdateTestEventState();
     }
 
     private void SaveCurrentRule()
@@ -565,6 +574,7 @@ public sealed class MainForm : Form
             _configurationDirty = true;
             RefreshRuleList(_selectedRuleIndex);
             UpdateSaveRuleState();
+            UpdateTestEventState();
             UpdateSaveConfigurationState();
             SetStatus("Rule saved in editor. Click Save configuration to write appsettings.json.");
         }
@@ -577,6 +587,7 @@ public sealed class MainForm : Form
     private void UpdateSaveConfigurationState()
     {
         _saveConfiguration.Enabled = _configurationDirty;
+        UpdateTestEventState();
     }
 
     private void UpdateSaveRuleState()
@@ -585,6 +596,7 @@ public sealed class MainForm : Form
         if (string.IsNullOrWhiteSpace(_ruleName.Text) || _logName.SelectedItem is null)
         {
             _saveRule.Enabled = false;
+            UpdateTestEventState();
             return;
         }
 
@@ -598,6 +610,34 @@ public sealed class MainForm : Form
         {
             _saveRule.Enabled = false;
         }
+        UpdateTestEventState();
+    }
+
+    private void UpdateTestEventState()
+    {
+        _createTestEvent.Enabled = _selectedRuleIndex >= 0 && _selectedRuleIndex < _rules.Count &&
+            SelectedRuleIndex == _selectedRuleIndex && _rules[_selectedRuleIndex].Enabled &&
+            !_configurationDirty && !_saveRule.Enabled && _loadedConfigPath is not null &&
+            string.Equals(_configPath.Text, _loadedConfigPath, StringComparison.OrdinalIgnoreCase) &&
+            File.Exists(_loadedConfigPath);
+    }
+
+    private void CreateTestEvent()
+    {
+        if (!_createTestEvent.Enabled) return;
+        try
+        {
+            UseWaitCursor = true;
+            var result = TestEventWriter.Write(_rules[_selectedRuleIndex]);
+            SetStatus(result);
+            MessageBox.Show(this, result, "Test event", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Could not create a matching test event.");
+            MessageBox.Show(this, ex.Message, "Test event rejected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally { UseWaitCursor = false; }
     }
 
     private EventRule ReadEditor()
@@ -674,6 +714,7 @@ public sealed class MainForm : Form
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, root.ToJsonString(JsonOptions));
             _configPath.Text = path;
+            _loadedConfigPath = path;
             _configurationDirty = false;
             UpdateSaveConfigurationState();
             SetStatus("Configuration saved. Restart the Event Log Monitor Windows service to apply the new rules.");
