@@ -1,0 +1,34 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run EventLogMonitor.Configurator",
+      "type": "dotnet",
+      "request": "launch",
+      "projectPath": "${workspaceFolder}/src/EventLogMonitor.Configurator/EventLogMonitor.Configurator.csproj"
+    },
+    {
+      "name": "Run EventLogMonitor (service)",
+      "type": "dotnet",
+      "request": "launch",
+      "projectPath": "${workspaceFolder}/src/EventLogMonitor/EventLogMonitor.csproj"
+    },
+    {
+      "name": "Run EventLogMonitor.WebhookReceiver",
+      "type": "dotnet",
+      "request": "launch",
+      "projectPath": "${workspaceFolder}/src/EventLogMonitor.WebhookReceiver/EventLogMonitor.WebhookReceiver.csproj"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Run all 3 projects",
+      "configurations": [
+        "Run EventLogMonitor.Configurator",
+        "Run EventLogMonitor (service)",
+        "Run EventLogMonitor.WebhookReceiver"
+      ],
+      "stopAll": true
+    }
+  ]
+}
