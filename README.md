@@ -188,9 +188,31 @@ scripts/
 
 ## AI rule drafting (added in 1.2)
 
-The Rule Builder has a **Describe the rule in plain English** box and a **Draft with AI** button. A local model (Ollama, no training, nothing leaves the machine) drafts the rules; you review and preview them, and nothing is saved until you click **Save configuration**. The monitoring service is not affected and does not use AI.
+The Rule Builder has a **Describe the rule in plain English** box and a **Draft with AI** button. It uses a model served locally by Ollama; the monitoring service is not affected and does not use AI.
 
-Quick start: install Ollama, run `ollama pull qwen2.5:7b`, open the Configurator, click **AI settings…** → **Test connection**, then type for example *"I have ASP.NET application 'Claims' in local IIS. Watch critical errors and notify me when only an IIS reset can help."*
+### Install and download the local model
+
+Do this on the computer where you run **EventLogMonitor.Configurator.exe**:
+
+1. Install Ollama for Windows from <https://ollama.com/download/windows> and start the Ollama app. Its local API should be available at `http://localhost:11434`.
+2. Open PowerShell and download the default model:
+
+   ```powershell
+   ollama pull qwen2.5:7b
+   ```
+
+3. Confirm the model is installed:
+
+   ```powershell
+   ollama list
+   ```
+
+4. Open the Configurator, click **AI settings…**, leave the endpoint as `http://localhost:11434` and the model name as `qwen2.5:7b`, then click **Test connection**. It should report **Connected. The model is installed.**
+5. Use **Open AI chat** / **Draft with AI** in the Rule Builder. Review the proposed rule and click **Save configuration** to save it.
+
+The model download is several gigabytes. A 7B model needs roughly 5–6 GB of free RAM; the first response may take longer while Ollama loads it. For a smaller machine, download `qwen2.5:3b` with `ollama pull qwen2.5:3b`, then set that exact model name in **AI settings…** and test the connection. For any other model, download it with `ollama pull <model-name>` and use the same name in AI settings.
+
+The endpoint and model are saved in `ai-settings.json` beside the Configurator executable. They are separate from the service's `appsettings.json`. Ollama must be running whenever you use the AI features. The default local endpoint keeps prompts on this computer; if you configure a different machine as the endpoint, prompts are sent to that machine.
 
 Full documentation: [docs/AI-RULE-DRAFTING.md](docs/AI-RULE-DRAFTING.md).
 
