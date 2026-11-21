@@ -2,5 +2,6 @@
 **/obj/
 publish/
 .vs/
+.chat-history/
 *.user
 *.suo
